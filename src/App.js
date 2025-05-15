@@ -20,107 +20,104 @@ import {
 import * as XLSX from 'xlsx';
 
 function App() {
-  // State for raw data
+  // Raw data states
   const [hoglundData, setHoglundData] = useState(null);
   const [metaData, setMetaData] = useState(null);
-  // Filters
+  // Filter states
   const [searchTerm, setSearchTerm] = useState('');
   const [unitFilter, setUnitFilter] = useState('');
   const [diffFilter, setDiffFilter] = useState('all');
   // Filtered output
   const [filteredData, setFilteredData] = useState(null);
 
-  // 1) Fetch both JSONs on mount
+  // 1) Fetch both JSON files
   useEffect(() => {
     Promise.all([
-      fetch('/hoglundData1.json').then(r => r.json()),
-      fetch('/metaIngest_from_NT.json').then(r => r.json())
+      fetch('/hoglundData1.json').then(res => res.json()),
+      fetch('/metaIngest_from_NT.json').then(res => res.json())
     ])
-    .then(([rawHoglund, metaArray]) => {
-      const hoglund = Array.isArray(rawHoglund) ? rawHoglund[0] : rawHoglund;
-      const metaMap = Object.fromEntries(
-        metaArray.map(item => [item.tag, item.metadata])
-      );
-      setHoglundData(hoglund);
-      setMetaData(metaMap);
-    })
-    .catch(err => console.error('Error loading JSON:', err));
+      .then(([rawH, rawM]) => {
+        const hData = Array.isArray(rawH) ? rawH[0] : rawH;
+        const mMap = Object.fromEntries(rawM.map(item => [item.tag, item.metadata]));
+        setHoglundData(hData);
+        setMetaData(mMap);
+      })
+      .catch(err => console.error('Error loading JSON:', err));
   }, []);
 
-  // 2) Build lists and master record
-  const allTags = hoglundData && metaData
-    ? Array.from(
-        new Set([...Object.keys(hoglundData), ...Object.keys(metaData)])
-      )
-    : [];
-  const onlyInHoglund = allTags.filter(
-    tag => hoglundData?.[tag] && !metaData?.[tag]
-  );
-  const onlyInMeta = allTags.filter(
-    tag => metaData?.[tag] && !hoglundData?.[tag]
-  );
-  const inBoth = allTags.filter(
-    tag => hoglundData?.[tag] && metaData?.[tag]
-  );
-  // Master record: merge Høglund entry, metadata, and diffType
+  // 2) Compute tag arrays and merged record
+  const hoglundTags = hoglundData ? Object.keys(hoglundData) : [];
+  const metaTags = metaData ? Object.keys(metaData) : [];
+  const allTags = Array.from(new Set([...hoglundTags, ...metaTags]));
+
+  const onlyInHoglund = allTags.filter(t => hoglundData?.[t] && !metaData?.[t]);
+  const onlyInMeta = allTags.filter(t => metaData?.[t] && !hoglundData?.[t]);
+  const inBoth = allTags.filter(t => hoglundData?.[t] && metaData?.[t]);
+
   const masterRecord = Object.fromEntries(
     allTags.map(tag => {
-      const entry = hoglundData?.[tag] || {};
+      const rec = hoglundData?.[tag] || {};
       const diffType =
         hoglundData?.[tag] && metaData?.[tag]
           ? 'both'
           : hoglundData?.[tag]
           ? 'onlyHoglund'
           : 'onlyMeta';
-      return [tag, { ...entry, metadata: metaData?.[tag] || null, diffType }];
+      return [tag, { ...rec, metadata: metaData?.[tag] || null, diffType }];
     })
   );
 
-  // 3) Unique units list for filter dropdown
-  const units = hoglundData
-    ? Array.from(
-        new Set(Object.values(hoglundData).map(e => e.UNIT))
-      )
-    : [];
+  // 3) Units list includes units from both JSONs
+  const units = React.useMemo(() => {
+    const u1 = hoglundData
+      ? Object.values(hoglundData).map(e => e.UNIT)
+      : [];
+    const u2 = metaData
+      ? Object.values(metaData).map(m => m.unit?.unitSymbol || '')
+      : [];
+    return Array.from(new Set([...u1, ...u2].filter(u => u)));
+  }, [hoglundData, metaData]);
 
-  // 4) Apply filters whenever inputs change
+  // 4) Apply filters
   useEffect(() => {
     if (!hoglundData || !metaData) return;
     const lower = searchTerm.toLowerCase();
-    const filteredEntries = Object.entries(masterRecord).filter(
-      ([tag, rec]) => {
-        const matchesSearch =
-          tag.toLowerCase().includes(lower) ||
-          (rec.DESCR?.toLowerCase().includes(lower)) ||
-          (rec.metadata?.description?.toLowerCase().includes(lower));
-        const matchesUnit =
-          unitFilter === '' || rec.UNIT === unitFilter;
-        const matchesDiff =
-          diffFilter === 'all' || rec.diffType === diffFilter;
-        return matchesSearch && matchesUnit && matchesDiff;
-      }
-    );
-    setFilteredData(Object.fromEntries(filteredEntries));
+    const entries = Object.entries(masterRecord).filter(([tag, rec]) => {
+      const matchesSearch =
+        tag.toLowerCase().includes(lower) ||
+        rec.DESCR?.toLowerCase().includes(lower) ||
+        rec.metadata?.description?.toLowerCase().includes(lower);
+      const matchesUnit = !unitFilter ||
+        (rec.UNIT === unitFilter) ||
+        (rec.metadata?.unit?.unitSymbol === unitFilter);
+      const matchesDiff = diffFilter === 'all' || rec.diffType === diffFilter;
+      return matchesSearch && matchesUnit && matchesDiff;
+    });
+    setFilteredData(Object.fromEntries(entries));
   }, [searchTerm, unitFilter, diffFilter, masterRecord, hoglundData, metaData]);
 
-  // 5) Totals
-  const totalTags = filteredData ? Object.keys(filteredData).length : 0;
+  // 5) Compute filtered counts for summary
+  const filteredEntries = filteredData ? Object.entries(filteredData) : [];
+  const filteredHoglundCount = filteredEntries.filter(([, rec]) => rec.diffType === 'both' || rec.diffType === 'onlyHoglund').length;
+  const filteredMetaCount = filteredEntries.filter(([, rec]) => rec.diffType === 'both' || rec.diffType === 'onlyMeta').length;
+  const filteredBothCount = filteredEntries.filter(([, rec]) => rec.diffType === 'both').length;
+  const filteredOnlyHoglundCount = filteredEntries.filter(([, rec]) => rec.diffType === 'onlyHoglund').length;
+  const filteredOnlyMetaCount = filteredEntries.filter(([, rec]) => rec.diffType === 'onlyMeta').length;
+  const filteredCount = filteredEntries.length;
 
-  // 6) Export to Excel
+  // 6) Export
   const exportToExcel = () => {
     if (!filteredData) return;
-    const excelRows = Object.entries(filteredData).map(
-      ([tag, rec]) => ({
-        Tag: tag,
-        Description: rec.DESCR,
-        Value: rec.VALUE,
-        Status: rec.STATUS,
-        Unit: rec.UNIT,
-        Created: rec.CREATED?.$date || '',
-        Diff: rec.diffType
-      })
-    );
-    const ws = XLSX.utils.json_to_sheet(excelRows);
+    const rows = filteredEntries.map(([tag, rec]) => ({
+      Tag: tag,
+      Description: rec.DESCR || rec.metadata?.name,
+      Value: rec.VALUE,
+      Status: rec.STATUS,
+      Unit: rec.UNIT || rec.metadata?.unit.unitSymbol,
+      Created: rec.CREATED?.$date || '',
+      Diff: rec.diffType
+    }));
+    const ws = XLSX.utils.json_to_sheet(rows);
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, 'Comparison');
     XLSX.writeFile(wb, 'comparison.xlsx');
@@ -149,11 +146,7 @@ function App() {
             label="Enhet"
           >
             <MenuItem value="">Alle</MenuItem>
-            {units.map(u => (
-              <MenuItem key={u} value={u}>
-                {u}
-              </MenuItem>
-            ))}
+            {units.map(u => <MenuItem key={u} value={u}>{u}</MenuItem>)}
           </Select>
         </FormControl>
         <FormControl sx={{ minWidth: 160 }}>
@@ -172,16 +165,16 @@ function App() {
         <Button
           variant="contained"
           onClick={exportToExcel}
-          disabled={totalTags === 0}
+          disabled={filteredCount === 0}
         >
           Eksporter Excel
         </Button>
       </Box>
 
-      {/* Summary */}
+      {/* Summary with filtered counts */}
       <Box sx={{ mb: 2 }}>
         <Typography>
-          Totalt tags: {allTags.length} | I begge: {inBoth.length} | Kun Høglund: {onlyInHoglund.length} | Kun Meta: {onlyInMeta.length}
+          Høglund total: {filteredHoglundCount} | Meta total: {filteredMetaCount} | I begge: {filteredBothCount} | Kun Høglund: {filteredOnlyHoglundCount} | Kun Meta: {filteredOnlyMetaCount}
         </Typography>
       </Box>
 
@@ -200,22 +193,17 @@ function App() {
             </TableRow>
           </TableHead>
           <TableBody>
-            {filteredData &&
-              Object.entries(filteredData).map(([tag, rec]) => (
-                <TableRow key={tag}>
-                  <TableCell>{tag}</TableCell>
-                  <TableCell>{rec.DESCR || rec.metadata?.name}</TableCell>
-                  <TableCell>{rec.VALUE}</TableCell>
-                  <TableCell>{rec.STATUS}</TableCell>
-                  <TableCell>{rec.UNIT || rec.metadata?.unit.unitSymbol}</TableCell>
-                  <TableCell>
-                    {rec.CREATED?.$date
-                      ? new Date(rec.CREATED.$date).toLocaleString()
-                      : ''}
-                  </TableCell>
-                  <TableCell>{rec.diffType}</TableCell>
-                </TableRow>
-              ))}
+            {filteredEntries.map(([tag, rec]) => (
+              <TableRow key={tag}>
+                <TableCell>{tag}</TableCell>
+                <TableCell>{rec.DESCR || rec.metadata?.name}</TableCell>
+                <TableCell>{rec.VALUE}</TableCell>
+                <TableCell>{rec.STATUS}</TableCell>
+                <TableCell>{rec.UNIT || rec.metadata?.unit.unitSymbol}</TableCell>
+                <TableCell>{rec.CREATED?.$date ? new Date(rec.CREATED.$date).toLocaleString() : ''}</TableCell>
+                <TableCell>{rec.diffType}</TableCell>
+              </TableRow>
+            ))}
           </TableBody>
         </Table>
       </TableContainer>
