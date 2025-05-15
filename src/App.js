@@ -20,85 +20,128 @@ import {
 import * as XLSX from 'xlsx';
 
 function App() {
-  const [data, setData] = useState(null);
+  // State for raw data
+  const [hoglundData, setHoglundData] = useState(null);
+  const [metaData, setMetaData] = useState(null);
+  // Filters
   const [searchTerm, setSearchTerm] = useState('');
   const [unitFilter, setUnitFilter] = useState('');
+  const [diffFilter, setDiffFilter] = useState('all');
+  // Filtered output
   const [filteredData, setFilteredData] = useState(null);
 
-  // Load and unwrap the JSON
+  // 1) Fetch both JSONs on mount
   useEffect(() => {
-    fetch('/hoglundData1.json')
-      .then(response => {
-        if (!response.ok) throw new Error(`HTTP ${response.status}`);
-        return response.json();
-      })
-      .then(jsonData => {
-        const record = Array.isArray(jsonData) ? jsonData[0] : jsonData;
-        setData(record);
-        setFilteredData(record);
-      })
-      .catch(error => console.error('Error loading data:', error));
+    Promise.all([
+      fetch('/hoglundData1.json').then(r => r.json()),
+      fetch('/metaIngest_from_NT.json').then(r => r.json())
+    ])
+    .then(([rawHoglund, metaArray]) => {
+      const hoglund = Array.isArray(rawHoglund) ? rawHoglund[0] : rawHoglund;
+      const metaMap = Object.fromEntries(
+        metaArray.map(item => [item.tag, item.metadata])
+      );
+      setHoglundData(hoglund);
+      setMetaData(metaMap);
+    })
+    .catch(err => console.error('Error loading JSON:', err));
   }, []);
 
-  // Compute list of unique units
-  const units = data
-    ? Array.from(new Set(Object.values(data).map(entry => entry.UNIT)))
+  // 2) Build lists and master record
+  const allTags = hoglundData && metaData
+    ? Array.from(
+        new Set([...Object.keys(hoglundData), ...Object.keys(metaData)])
+      )
+    : [];
+  const onlyInHoglund = allTags.filter(
+    tag => hoglundData?.[tag] && !metaData?.[tag]
+  );
+  const onlyInMeta = allTags.filter(
+    tag => metaData?.[tag] && !hoglundData?.[tag]
+  );
+  const inBoth = allTags.filter(
+    tag => hoglundData?.[tag] && metaData?.[tag]
+  );
+  // Master record: merge Høglund entry, metadata, and diffType
+  const masterRecord = Object.fromEntries(
+    allTags.map(tag => {
+      const entry = hoglundData?.[tag] || {};
+      const diffType =
+        hoglundData?.[tag] && metaData?.[tag]
+          ? 'both'
+          : hoglundData?.[tag]
+          ? 'onlyHoglund'
+          : 'onlyMeta';
+      return [tag, { ...entry, metadata: metaData?.[tag] || null, diffType }];
+    })
+  );
+
+  // 3) Unique units list for filter dropdown
+  const units = hoglundData
+    ? Array.from(
+        new Set(Object.values(hoglundData).map(e => e.UNIT))
+      )
     : [];
 
-  // Filter whenever search term, unit filter, or loaded data changes
+  // 4) Apply filters whenever inputs change
   useEffect(() => {
-    if (!data) return;
-
-    const searchLower = searchTerm.toLowerCase();
-    const filteredEntries = Object.entries(data).filter(([tag, entry]) => {
-      const matchesSearch =
-        tag.toLowerCase().includes(searchLower) ||
-        (entry.DESCR && entry.DESCR.toLowerCase().includes(searchLower));
-      const matchesUnit =
-        unitFilter === '' || entry.UNIT === unitFilter;
-      return matchesSearch && matchesUnit;
-    });
-
+    if (!hoglundData || !metaData) return;
+    const lower = searchTerm.toLowerCase();
+    const filteredEntries = Object.entries(masterRecord).filter(
+      ([tag, rec]) => {
+        const matchesSearch =
+          tag.toLowerCase().includes(lower) ||
+          (rec.DESCR?.toLowerCase().includes(lower)) ||
+          (rec.metadata?.description?.toLowerCase().includes(lower));
+        const matchesUnit =
+          unitFilter === '' || rec.UNIT === unitFilter;
+        const matchesDiff =
+          diffFilter === 'all' || rec.diffType === diffFilter;
+        return matchesSearch && matchesUnit && matchesDiff;
+      }
+    );
     setFilteredData(Object.fromEntries(filteredEntries));
-  }, [searchTerm, unitFilter, data]);
+  }, [searchTerm, unitFilter, diffFilter, masterRecord, hoglundData, metaData]);
 
-  // Compute total number of tags currently displayed
+  // 5) Totals
   const totalTags = filteredData ? Object.keys(filteredData).length : 0;
 
-  // Export the currently filtered rows to Excel
+  // 6) Export to Excel
   const exportToExcel = () => {
     if (!filteredData) return;
-
-    const excelData = Object.entries(filteredData).map(([tag, entry]) => ({
-      Tag: tag,
-      Description: entry.DESCR,
-      Value: entry.VALUE,
-      Status: entry.STATUS,
-      Unit: entry.UNIT,
-      Created: entry.CREATED?.$date || ''
-    }));
-
-    const ws = XLSX.utils.json_to_sheet(excelData);
+    const excelRows = Object.entries(filteredData).map(
+      ([tag, rec]) => ({
+        Tag: tag,
+        Description: rec.DESCR,
+        Value: rec.VALUE,
+        Status: rec.STATUS,
+        Unit: rec.UNIT,
+        Created: rec.CREATED?.$date || '',
+        Diff: rec.diffType
+      })
+    );
+    const ws = XLSX.utils.json_to_sheet(excelRows);
     const wb = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb, ws, 'Høglund Data');
-    XLSX.writeFile(wb, 'hoglund_data.xlsx');
+    XLSX.utils.book_append_sheet(wb, ws, 'Comparison');
+    XLSX.writeFile(wb, 'comparison.xlsx');
   };
 
   return (
     <Container maxWidth="lg" sx={{ mt: 4 }}>
       <Typography variant="h4" gutterBottom>
-        Høglund Data Viewer
+        Høglund Meta Comparison
       </Typography>
 
-      <Box sx={{ mb: 3, display: 'flex', gap: 2, alignItems: 'center' }}>
+      {/* Filters & Export */}
+      <Box sx={{ mb: 3, display: 'flex', gap: 2, flexWrap: 'wrap' }}>
         <TextField
-          sx={{ flex: 1 }}
-          label="Søk i tags eller beskrivelser"
+          label="Søk"
           variant="outlined"
+          sx={{ flex: 1 }}
           value={searchTerm}
           onChange={e => setSearchTerm(e.target.value)}
         />
-        <FormControl variant="outlined" sx={{ minWidth: 120 }}>
+        <FormControl sx={{ minWidth: 120 }}>
           <InputLabel>Enhet</InputLabel>
           <Select
             value={unitFilter}
@@ -106,22 +149,43 @@ function App() {
             label="Enhet"
           >
             <MenuItem value="">Alle</MenuItem>
-            {units.map(unit => (
-              <MenuItem key={unit} value={unit}>
-                {unit}
+            {units.map(u => (
+              <MenuItem key={u} value={u}>
+                {u}
               </MenuItem>
             ))}
+          </Select>
+        </FormControl>
+        <FormControl sx={{ minWidth: 160 }}>
+          <InputLabel>Difference</InputLabel>
+          <Select
+            value={diffFilter}
+            onChange={e => setDiffFilter(e.target.value)}
+            label="Difference"
+          >
+            <MenuItem value="all">Alle</MenuItem>
+            <MenuItem value="both">I begge</MenuItem>
+            <MenuItem value="onlyHoglund">Kun Høglund</MenuItem>
+            <MenuItem value="onlyMeta">Kun Meta</MenuItem>
           </Select>
         </FormControl>
         <Button
           variant="contained"
           onClick={exportToExcel}
-          disabled={!filteredData || totalTags === 0}
+          disabled={totalTags === 0}
         >
-          Eksporter til Excel
+          Eksporter Excel
         </Button>
       </Box>
 
+      {/* Summary */}
+      <Box sx={{ mb: 2 }}>
+        <Typography>
+          Totalt tags: {allTags.length} | I begge: {inBoth.length} | Kun Høglund: {onlyInHoglund.length} | Kun Meta: {onlyInMeta.length}
+        </Typography>
+      </Box>
+
+      {/* Data Table */}
       <TableContainer component={Paper}>
         <Table>
           <TableHead>
@@ -132,24 +196,24 @@ function App() {
               <TableCell>Status</TableCell>
               <TableCell>Enhet</TableCell>
               <TableCell>Opprettet</TableCell>
-              <TableCell>Totalt tags</TableCell>
+              <TableCell>Diff</TableCell>
             </TableRow>
           </TableHead>
           <TableBody>
             {filteredData &&
-              Object.entries(filteredData).map(([tag, entry]) => (
+              Object.entries(filteredData).map(([tag, rec]) => (
                 <TableRow key={tag}>
                   <TableCell>{tag}</TableCell>
-                  <TableCell>{entry.DESCR}</TableCell>
-                  <TableCell>{entry.VALUE}</TableCell>
-                  <TableCell>{entry.STATUS}</TableCell>
-                  <TableCell>{entry.UNIT}</TableCell>
+                  <TableCell>{rec.DESCR || rec.metadata?.name}</TableCell>
+                  <TableCell>{rec.VALUE}</TableCell>
+                  <TableCell>{rec.STATUS}</TableCell>
+                  <TableCell>{rec.UNIT || rec.metadata?.unit.unitSymbol}</TableCell>
                   <TableCell>
-                    {entry.CREATED?.$date
-                      ? new Date(entry.CREATED.$date).toLocaleString()
+                    {rec.CREATED?.$date
+                      ? new Date(rec.CREATED.$date).toLocaleString()
                       : ''}
                   </TableCell>
-                  <TableCell>{totalTags}</TableCell>
+                  <TableCell>{rec.diffType}</TableCell>
                 </TableRow>
               ))}
           </TableBody>
