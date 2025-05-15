@@ -2,6 +2,10 @@ import React, { useState, useEffect } from 'react';
 import {
   Container,
   TextField,
+  Select,
+  MenuItem,
+  FormControl,
+  InputLabel,
   Table,
   TableBody,
   TableCell,
@@ -18,6 +22,7 @@ import * as XLSX from 'xlsx';
 function App() {
   const [data, setData] = useState(null);
   const [searchTerm, setSearchTerm] = useState('');
+  const [unitFilter, setUnitFilter] = useState('');
   const [filteredData, setFilteredData] = useState(null);
 
   // Load and unwrap the JSON
@@ -35,20 +40,27 @@ function App() {
       .catch(error => console.error('Error loading data:', error));
   }, []);
 
-  // Filter whenever the search term or loaded data changes
+  // Compute list of unique units
+  const units = data
+    ? Array.from(new Set(Object.values(data).map(entry => entry.UNIT)))
+    : [];
+
+  // Filter whenever search term, unit filter, or loaded data changes
   useEffect(() => {
     if (!data) return;
 
     const searchLower = searchTerm.toLowerCase();
     const filteredEntries = Object.entries(data).filter(([tag, entry]) => {
-      return (
+      const matchesSearch =
         tag.toLowerCase().includes(searchLower) ||
-        (entry.DESCR && entry.DESCR.toLowerCase().includes(searchLower))
-      );
+        (entry.DESCR && entry.DESCR.toLowerCase().includes(searchLower));
+      const matchesUnit =
+        unitFilter === '' || entry.UNIT === unitFilter;
+      return matchesSearch && matchesUnit;
     });
 
     setFilteredData(Object.fromEntries(filteredEntries));
-  }, [searchTerm, data]);
+  }, [searchTerm, unitFilter, data]);
 
   // Compute total number of tags currently displayed
   const totalTags = filteredData ? Object.keys(filteredData).length : 0;
@@ -78,14 +90,29 @@ function App() {
         Høglund Data Viewer
       </Typography>
 
-      <Box sx={{ mb: 3, display: 'flex', gap: 2 }}>
+      <Box sx={{ mb: 3, display: 'flex', gap: 2, alignItems: 'center' }}>
         <TextField
-          fullWidth
+          sx={{ flex: 1 }}
           label="Søk i tags eller beskrivelser"
           variant="outlined"
           value={searchTerm}
           onChange={e => setSearchTerm(e.target.value)}
         />
+        <FormControl variant="outlined" sx={{ minWidth: 120 }}>
+          <InputLabel>Enhet</InputLabel>
+          <Select
+            value={unitFilter}
+            onChange={e => setUnitFilter(e.target.value)}
+            label="Enhet"
+          >
+            <MenuItem value="">Alle</MenuItem>
+            {units.map(unit => (
+              <MenuItem key={unit} value={unit}>
+                {unit}
+              </MenuItem>
+            ))}
+          </Select>
+        </FormControl>
         <Button
           variant="contained"
           onClick={exportToExcel}
