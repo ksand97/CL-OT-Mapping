@@ -5,18 +5,19 @@
   "dependencies": {
     "@emotion/react": "^11.11.0",
     "@emotion/styled": "^11.11.0",
-    "@mui/material": "^5.13.0",
     "@mui/icons-material": "^5.11.16",
+    "@mui/material": "^5.13.0",
     "react": "^18.2.0",
     "react-dom": "^18.2.0",
-    "xlsx": "^0.18.5",
-    "react-scripts": "5.0.1"
+    "react-scripts": "5.0.1",
+    "xlsx": "^0.18.5"
   },
   "scripts": {
     "start": "react-scripts start",
     "build": "react-scripts build",
     "test": "react-scripts test",
-    "eject": "react-scripts eject"
+    "eject": "react-scripts eject",
+    "fetch-tags": "node src/fetchTags.mjs"
   },
   "eslintConfig": {
     "extends": [
@@ -37,7 +38,10 @@
     ]
   },
   "main": "index.js",
-  "devDependencies": {},
+  "devDependencies": {
+    "newman": "^6.2.1",
+    "node-fetch": "^3.3.2"
+  },
   "keywords": [],
   "author": "",
   "license": "ISC",
